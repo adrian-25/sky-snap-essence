@@ -14,7 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      images: {
+        Row: {
+          birth_date: string | null
+          friend_name: string | null
+          id: string
+          image_url: string
+          is_private: boolean | null
+          tags: string[] | null
+          uploaded_at: string | null
+          user_id: string
+        }
+        Insert: {
+          birth_date?: string | null
+          friend_name?: string | null
+          id?: string
+          image_url: string
+          is_private?: boolean | null
+          tags?: string[] | null
+          uploaded_at?: string | null
+          user_id: string
+        }
+        Update: {
+          birth_date?: string | null
+          friend_name?: string | null
+          id?: string
+          image_url?: string
+          is_private?: boolean | null
+          tags?: string[] | null
+          uploaded_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
