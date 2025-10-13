@@ -2,3 +2,6 @@ project_id = "ecfdypbqbmlizegmlhru"
 
 [functions.analyze-image]
 verify_jwt = false
+
+[functions.send-birthday-email]
+verify_jwt = false

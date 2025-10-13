@@ -13,6 +13,8 @@ const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [birthday, setBirthday] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -29,11 +31,19 @@ const Auth = () => {
         toast.success("Welcome back!");
         navigate("/dashboard");
       } else {
+        if (!username.trim()) {
+          toast.error("Username is required");
+          return;
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
             emailRedirectTo: `${window.location.origin}/dashboard`,
+            data: {
+              username: username.trim(),
+              birthday: birthday || null,
+            },
           },
         });
         if (error) throw error;
@@ -91,6 +101,30 @@ const Auth = () => {
                 required
               />
             </div>
+            {!isLogin && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="username">Username</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    placeholder="johndoe"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="birthday">Birthday (Optional)</Label>
+                  <Input
+                    id="birthday"
+                    type="date"
+                    value={birthday}
+                    onChange={(e) => setBirthday(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             <Button type="submit" className="w-full cloud-gradient text-white" disabled={loading}>
               {loading ? "Loading..." : isLogin ? "Sign In" : "Sign Up"}
             </Button>

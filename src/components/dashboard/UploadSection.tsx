@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,26 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
   const [birthDate, setBirthDate] = useState("");
   const [isPrivate, setIsPrivate] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [username, setUsername] = useState<string>("");
+
+  // Fetch username on mount
+  useEffect(() => {
+    const fetchUsername = async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("username")
+        .eq("id", userId)
+        .single();
+      
+      if (data && !error) {
+        setUsername(data.username);
+      }
+    };
+    
+    if (userId) {
+      fetchUsername();
+    }
+  }, [userId]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -29,16 +49,16 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
   };
 
   const handleUpload = async () => {
-    if (!file || !userId) {
+    if (!file || !userId || !username) {
       toast.error("Please select a file");
       return;
     }
 
     setUploading(true);
     try {
-      // Upload to Supabase Storage
+      // Upload to Supabase Storage using username folder
       const fileExt = file.name.split(".").pop();
-      const fileName = `${userId}/${Date.now()}.${fileExt}`;
+      const fileName = `${username}/${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
         .from("user-images")
         .upload(fileName, file);
