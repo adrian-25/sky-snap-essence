@@ -21,59 +21,128 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
   const [uploading, setUploading] = useState(false);
   const [username, setUsername] = useState<string>("");
 
-  // Fetch username on mount
+  // Ensure a profile exists and load username (prevents storage policy denials)
   useEffect(() => {
-    const fetchUsername = async () => {
-      const { data, error } = await supabase
+    const ensureProfileAndLoad = async () => {
+      if (!userId) return;
+      const { data: prof, error: profErr } = await supabase
         .from("profiles")
-        .select("username")
+        .select("id,username")
         .eq("id", userId)
-        .single();
-      
-      if (data && !error) {
-        setUsername(data.username);
+        .maybeSingle();
+
+      if (prof && !profErr) {
+        setUsername(prof.username);
+        return;
       }
+
+      // Create a profile if missing using auth metadata/email
+      const { data: userRes } = await supabase.auth.getUser();
+      const email = userRes.user?.email || "user";
+      const metaUsername = (userRes.user?.user_metadata as any)?.username as string | undefined;
+      const base = metaUsername?.trim() || (email.includes("@") ? email.split("@")[0] : email);
+      const candidate = base || `user_${Date.now()}`;
+
+      // Try to insert; if unique collision, append a suffix
+      let finalUsername = candidate;
+      let created = false;
+      for (let attempt = 0; attempt < 2 && !created; attempt++) {
+        const { error: insertErr } = await supabase
+          .from("profiles")
+          .insert({ id: userId, username: finalUsername })
+          .single();
+        if (!insertErr) {
+          created = true;
+          break;
+        }
+        finalUsername = `${candidate}-${Math.floor(Math.random() * 10000)}`;
+      }
+      setUsername(finalUsername);
     };
-    
-    if (userId) {
-      fetchUsername();
-    }
+
+    ensureProfileAndLoad();
   }, [userId]);
+
+  // Allowed image types (strict)
+  const allowedMimeTypes = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+  const allowedExtensions = new Set(["jpg", "jpeg", "png", "webp"]);
+
+  const isAllowedImageFile = (f: File): boolean => {
+    const mimeOk = f.type ? allowedMimeTypes.has(f.type.toLowerCase()) : false;
+    const name = f.name || "";
+    const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+    const extOk = allowedExtensions.has(ext);
+    // Accept if MIME or extension matches to handle browsers that omit type
+    return mimeOk || extOk;
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
+      if (!isAllowedImageFile(selectedFile)) {
+        toast.error("Unsupported file type. Please choose a JPG, JPEG, PNG, or WebP image.");
+        setFile(null);
+        setPreview("");
+        e.currentTarget.value = ""; // reset input so same file can be re-selected
+        return;
+      }
       setFile(selectedFile);
       setPreview(URL.createObjectURL(selectedFile));
+    } else {
+      // No file selected: clear state to avoid stale preview
+      setFile(null);
+      setPreview("");
     }
   };
 
   const handleUpload = async () => {
-    if (!file || !userId || !username) {
-      toast.error("Please select a file");
+    // Clear, precise validation and messaging
+    if (!file) {
+      toast.error("Please select an image file before uploading.");
+      return;
+    }
+    if (!isAllowedImageFile(file)) {
+      toast.error("Unsupported file type. Please choose a JPG, JPEG, PNG, or WebP image.");
+      return;
+    }
+    if (!userId) {
+      toast.error("You must be signed in to upload.");
+      return;
+    }
+    if (!username) {
+      toast.info("Your profile is loading. Please try again in a moment.");
       return;
     }
 
     setUploading(true);
     try {
+      // Validate again right before upload (defense-in-depth)
+      if (!isAllowedImageFile(file)) {
+        throw new Error("Only JPG, JPEG, PNG, or WebP image files are allowed.");
+      }
       // Upload to Supabase Storage using username folder
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${username}/${Date.now()}.${fileExt}`;
+      const fileExt = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const fileName = `${username}/${Date.now()}.${fileExt}`; // username-based folder
       const { error: uploadError } = await supabase.storage
         .from("user-images")
-        .upload(fileName, file);
+        .upload(fileName, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type || "image/jpeg",
+        });
 
       if (uploadError) throw uploadError;
 
-      // Get public URL
-      const { data: urlData } = supabase.storage
+      // Create a signed URL for immediate secure access and AI analysis
+      const { data: signed } = await supabase.storage
         .from("user-images")
-        .getPublicUrl(fileName);
+        .createSignedUrl(fileName, 60 * 60 * 24); // 24 hours
+      const signedUrl = signed?.signedUrl;
 
       // Get AI tags
       toast.info("🤖 AI is analyzing your photo...", { duration: 2000 });
       const { data: aiData, error: aiError } = await supabase.functions.invoke("analyze-image", {
-        body: { imageUrl: urlData.publicUrl },
+        body: { imageUrl: signedUrl || '' },
       });
 
       if (aiError) {
@@ -83,10 +152,13 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
 
       const tags = aiData?.tags || [];
 
-      // Save metadata to database
+      // Save metadata to database using the canonical public URL reference
+      const { data: publicUrlData } = supabase.storage
+        .from("user-images")
+        .getPublicUrl(fileName);
       const { error: dbError } = await supabase.from("images").insert({
         user_id: userId,
-        image_url: urlData.publicUrl,
+        image_url: publicUrlData.publicUrl,
         friend_name: friendName || null,
         birth_date: birthDate || null,
         tags,
@@ -94,6 +166,16 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
       });
 
       if (dbError) throw dbError;
+
+      // Also insert AI tags into image_metadata with storage file path
+      const { error: metaError } = await supabase.from("image_metadata").insert({
+        user_id: userId,
+        file_path: fileName,
+        tags,
+      });
+      if (metaError) {
+        console.warn("image_metadata insert warning:", metaError.message);
+      }
 
       toast.success("Memory uploaded successfully! ☁️");
       
@@ -126,7 +208,7 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
           <Input
             id="photo"
             type="file"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp"
             onChange={handleFileChange}
             disabled={uploading}
           />
@@ -180,7 +262,7 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
 
         <Button
           onClick={handleUpload}
-          disabled={!file || uploading}
+          disabled={!file || uploading || !username}
           className="w-full cloud-gradient text-white"
         >
           {uploading ? "Uploading..." : "Upload Memory"}
