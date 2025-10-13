@@ -1,110 +1,77 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.75.0';
+import { Resend } from "npm:resend@2.0.0";
+
+const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Create Supabase client
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { userEmail, userName, friendName } = await req.json();
 
-    // Get today's date in MM-DD format
-    const today = new Date();
-    const todayMonthDay = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    console.log('Checking birthdays for:', todayMonthDay);
-
-    // Query profiles for birthdays matching today
-    const { data: profiles, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, username, birthday')
-      .not('birthday', 'is', null);
-
-    if (profileError) {
-      console.error('Error fetching profiles:', profileError);
-      throw profileError;
+    if (!userEmail || !userName || !friendName) {
+      throw new Error("Missing required fields");
     }
 
-    console.log('Found profiles:', profiles?.length);
+    const { error } = await resend.emails.send({
+      from: "Cloud Memory Gallery <onboarding@resend.dev>",
+      to: [userEmail],
+      subject: `🎉 Tomorrow is ${friendName}'s Birthday!`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h1 style="color: #4F46E5; text-align: center;">🎂 Birthday Reminder</h1>
+          <p style="font-size: 16px; line-height: 1.6;">
+            Hi ${userName},
+          </p>
+          <p style="font-size: 16px; line-height: 1.6;">
+            Just a friendly reminder that <strong>${friendName}'s birthday</strong> is tomorrow! 🎉
+          </p>
+          <p style="font-size: 16px; line-height: 1.6;">
+            We've compiled all your memories with ${friendName} in your Cloud Memory Gallery. 
+            Log in to view and share them!
+          </p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${Deno.env.get('SUPABASE_URL')}" 
+               style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                      color: white; 
+                      padding: 12px 30px; 
+                      text-decoration: none; 
+                      border-radius: 8px;
+                      display: inline-block;">
+              View Memories
+            </a>
+          </div>
+          <p style="font-size: 14px; color: #666; margin-top: 30px;">
+            Best wishes,<br>
+            Cloud Memory Gallery Team
+          </p>
+        </div>
+      `,
+    });
 
-    // Filter profiles with today's birthday
-    const birthdayProfiles = profiles?.filter(profile => {
-      if (!profile.birthday) return false;
-      const birthDate = new Date(profile.birthday);
-      const birthMonthDay = `${String(birthDate.getMonth() + 1).padStart(2, '0')}-${String(birthDate.getDate()).padStart(2, '0')}`;
-      return birthMonthDay === todayMonthDay;
-    }) || [];
-
-    console.log('Birthday profiles today:', birthdayProfiles.length);
-
-    // Send emails for each birthday person
-    const results = [];
-    for (const profile of birthdayProfiles) {
-      // Get user's email from auth.users
-      const { data: userData, error: userError } = await supabase.auth.admin.getUserById(profile.id);
-      
-      if (userError || !userData.user) {
-        console.error('Error fetching user:', userError);
-        continue;
-      }
-
-      const userEmail = userData.user.email;
-      
-      // Get all images for this user
-      const { data: images, error: imagesError } = await supabase
-        .from('images')
-        .select('image_url, uploaded_at')
-        .eq('user_id', profile.id)
-        .order('uploaded_at', { ascending: false })
-        .limit(10);
-
-      if (imagesError) {
-        console.error('Error fetching images:', imagesError);
-      }
-
-      // For now, just log - you'll need to integrate with an email service like Resend
-      console.log(`🎂 Birthday today for ${profile.username} (${userEmail})`);
-      console.log(`Found ${images?.length || 0} images for memory collage`);
-      
-      // TODO: Integrate with email service (Resend) to send actual emails
-      // You'll need to add RESEND_API_KEY secret and implement email sending
-      
-      results.push({
-        username: profile.username,
-        email: userEmail,
-        imageCount: images?.length || 0,
-        status: 'logged' // Change to 'sent' when email is implemented
-      });
+    if (error) {
+      console.error("Email send error:", error);
+      throw error;
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: `Checked ${profiles?.length} profiles, found ${birthdayProfiles.length} birthdays today`,
-        results
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      }
-    );
-
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
+    });
   } catch (error: any) {
-    console.error('Error in send-birthday-email function:', error);
+    console.error("Error in send-birthday-email:", error);
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
   }
