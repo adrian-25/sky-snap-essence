@@ -7,10 +7,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Upload, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { loadFaceModels, detectFacesAndEmbeddings } from "@/lib/faceDetection";
+import { Progress } from '@/components/ui/progress';
 
 interface UploadSectionProps {
   userId: string;
+}
+
+// Utility: downscale image before face detection
+function resizeImage(img: HTMLImageElement, maxDim = 400): HTMLCanvasElement {
+  const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx?.drawImage(img, 0, 0, w, h);
+  return canvas;
 }
 
 const UploadSection = ({ userId }: UploadSectionProps) => {
@@ -21,8 +34,9 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
   const [isPrivate, setIsPrivate] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [username, setUsername] = useState<string>("");
-  const [analyzingFaces, setAnalyzingFaces] = useState(false);
-  const [faceEmbeddings, setFaceEmbeddings] = useState<number[][]>([]);
+  const [usageMb, setUsageMb] = useState(0);
+  const [quotaMb] = useState(500);
+  const [checkingUsage, setCheckingUsage] = useState(false);
 
   // Ensure a profile exists and load username (prevents storage policy denials)
   useEffect(() => {
@@ -66,11 +80,30 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
     ensureProfileAndLoad();
   }, [userId]);
 
-  // Load face-api models at component mount (loads from /models)
+  // Function to fetch and update storage usage
+  const fetchUserStorageUsage = async (user: string) => {
+    setCheckingUsage(true);
+    let totalBytes = 0;
+    let page = 0;
+    let more = true;
+    while (more) {
+      const { data: files, error } = await supabase.storage
+        .from('user-images')
+        .list(`${user}/`, { limit: 100, offset: page * 100 });
+      if (error) break;
+      if (!files) break;
+      totalBytes += files.reduce((sum, file) => sum + (file?.metadata?.size || file.size || 0), 0);
+      more = files.length === 100;
+      page++;
+    }
+    setUsageMb(totalBytes / (1024 * 1024));
+    setCheckingUsage(false);
+  };
+
+  // Call on mount and username set:
   useEffect(() => {
-    loadFaceModels("/models")
-      .catch((err) => console.error("Failed to load face models: ", err));
-  }, []);
+    if (username) fetchUserStorageUsage(username);
+  }, [username]);
 
   // Allowed image types (strict)
   const allowedMimeTypes = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
@@ -123,27 +156,13 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
       return;
     }
 
-    setUploading(true);
-    setAnalyzingFaces(true);
-    try {
-      // --- Face Embedding Extraction ---
-      let faces: { embedding: number[], box: any }[] = [];
-      if (file) {
-        // Convert File → HTMLImageElement (must be loaded in DOM)
-        const url = URL.createObjectURL(file);
-        const img = document.createElement('img');
-        img.src = url;
-        await new Promise(res => { img.onload = res; });
-        faces = await detectFacesAndEmbeddings(img);
-        URL.revokeObjectURL(url);
-        setFaceEmbeddings(faces.map(f => f.embedding));
-      }
-      setAnalyzingFaces(false);
+    if (usageMb + (file.size || 0) / (1024 * 1024) > quotaMb) {
+      toast.error(`Storage limit exceeded. You have used ${usageMb.toFixed(1)}MB / ${quotaMb}MB.`);
+      return;
+    }
 
-      // Validate again right before upload (defense-in-depth)
-      if (!isAllowedImageFile(file)) {
-        throw new Error("Only JPG, JPEG, PNG, or WebP image files are allowed.");
-      }
+    setUploading(true);
+    try {
       // Upload to Supabase Storage using username folder
       const fileExt = (file.name.split(".").pop() || "jpg").toLowerCase();
       const fileName = `${username}/${Date.now()}.${fileExt}`; // username-based folder
@@ -187,7 +206,6 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         birth_date: birthDate || null,
         tags,
         is_private: isPrivate,
-        face_embeddings: faces.map(f => JSON.stringify(f.embedding)), // store as JSON-serialized
       });
 
       if (dbError) throw dbError;
@@ -197,7 +215,6 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         user_id: userId,
         file_path: fileName,
         tags,
-        face_embeddings: faces.map(f => JSON.stringify(f.embedding)),
       });
       if (metaError) {
         console.warn("image_metadata insert warning:", metaError.message);
@@ -211,9 +228,9 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
       setFriendName("");
       setBirthDate("");
       setIsPrivate(true);
-      setFaceEmbeddings([]);
+      if (username) fetchUserStorageUsage(username);
     } catch (error: any) {
-      setAnalyzingFaces(false);
+      setUploading(false);
       console.error("Upload error:", error);
       toast.error(error.message || "Failed to upload");
     } finally {
@@ -231,12 +248,15 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         <CardDescription>Share a moment with AI-powered tagging</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {analyzingFaces && (
-          <div className="py-3 flex items-center gap-2 animate-pulse">
-            <span className="loader mr-2" style={{width:16, height:16, borderRadius:'50%', borderTop:'2px solid #38bdf8', borderRight:'2px solid transparent', animation:'spin 1s linear infinite', display:'inline-block'}}></span>
-            <span className="font-medium text-sky-500">Analyzing Faces…</span>
+        <div className="mb-2">
+          <div className="flex gap-2 items-center mb-1">
+            <span className={`font-semibold ${usageMb / quotaMb > 0.9 ? 'text-red-500 animate-pulse' : 'text-sky-700'}`}>{usageMb.toFixed(1)} MB</span>
+            <span className="text-muted-foreground">/ {quotaMb} MB used</span>
+            {checkingUsage && <span className="text-xs ml-2 text-muted-foreground animate-pulse">Checking...</span>}
           </div>
-        )}
+          <Progress value={Math.min((usageMb / quotaMb) * 100, 100)} indicatorColor={usageMb / quotaMb > 0.9 ? 'bg-red-500' : 'bg-sky-500'} />
+          {usageMb / quotaMb > 0.9 && <div className="text-xs text-red-500 mt-1">Warning: Approaching limit!</div>}
+        </div>
         <div className="space-y-2">
           <Label htmlFor="photo">Photo</Label>
           <Input
