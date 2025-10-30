@@ -1,73 +1,67 @@
-# Welcome to your Lovable project
+# Sky Snap Essence
 
-## Project info
+A Next.js + Supabase image storage and gallery app, now with Face-Based Albums powered by face-api.js!
 
-**URL**: https://lovable.dev/projects/64dd1bf1-9490-4d86-bbb1-7d15b792daa3
+---
 
-## How can I edit this code?
+## 🚀 Features
+- Upload images with client-side face detection
+- Automatically group images by similar faces ("Face Albums", e.g., Me, Family, Friends)
+- Realtime, privacy-first galleries
+- AI-powered tags
+- Sleek UI with TailwindCSS and Framer Motion
 
-There are several ways of editing your application.
+---
+## 🖼️ Face-Based Albums
 
-**Use Lovable**
+### How it works:
+- When you upload a photo, faces are detected in the browser using [face-api.js](https://justadudewhohacks.github.io/face-api.js/).
+- Each detected face is converted into an embedding (descriptor), which is sent to Supabase along with your image.
+- Images are automatically grouped: if a face matches a previous cluster (similarity >= 0.8), it's added to that "album".
+- A new page `/albums` displays all your grouped albums with live counts, preview faces, and smooth transitions.
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/64dd1bf1-9490-4d86-bbb1-7d15b792daa3) and start prompting.
+### To Enable Face Detection:
+- **face-api.js models folder:** Already present under `public/models/` – if missing, download from [here](https://github.com/justadudewhohacks/face-api.js-models) and place all folders under `public/models/`.
+- No server-side compute needed – all runs efficiently in the browser!
 
-Changes made via Lovable will be committed automatically to this repo.
+### Database Requirements
+You MUST have the following columns on Supabase:
+```sql
+ALTER TABLE public.images
+  ADD COLUMN IF NOT EXISTS face_embeddings JSONB,
+  ADD COLUMN IF NOT EXISTS main_face_cluster_id UUID;
 
-**Use your preferred IDE**
+ALTER TABLE public.image_metadata
+  ADD COLUMN IF NOT EXISTS face_embeddings JSONB,
+  ADD COLUMN IF NOT EXISTS face_cluster_ids JSONB;
+```
+- See `/supabase/migrations/` for reference migrations.
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+---
+## 🏗️ Local Development
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+---
+## 🔗 Album/Cluster Logic
+- See `src/lib/faceDetection.ts` for detection/embedding utilities
+- See `src/lib/faceClustering.ts` for clustering/group assignment code
+- Page at `/albums` is implemented in `src/pages/Albums.tsx`
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+---
+## ✨ Future Improvements
+- Allow user to rename/merge albums
+- Cache face embeddings locally
+- Smoother transitions and advanced album management
+---
 
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
+## Technologies Used
 - Vite
-- TypeScript
-- React
-- shadcn-ui
+- React (Next.js-like filesystem routing)
+- Supabase
 - Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/64dd1bf1-9490-4d86-bbb1-7d15b792daa3) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- face-api.js (face detection in browser)
+- Framer Motion (UI animations)

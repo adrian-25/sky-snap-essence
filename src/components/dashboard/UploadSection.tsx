@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Upload, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { loadFaceModels, detectFacesAndEmbeddings } from "@/lib/faceDetection";
 
 interface UploadSectionProps {
   userId: string;
@@ -20,6 +21,8 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
   const [isPrivate, setIsPrivate] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [username, setUsername] = useState<string>("");
+  const [analyzingFaces, setAnalyzingFaces] = useState(false);
+  const [faceEmbeddings, setFaceEmbeddings] = useState<number[][]>([]);
 
   // Ensure a profile exists and load username (prevents storage policy denials)
   useEffect(() => {
@@ -62,6 +65,12 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
 
     ensureProfileAndLoad();
   }, [userId]);
+
+  // Load face-api models at component mount (loads from /models)
+  useEffect(() => {
+    loadFaceModels("/models")
+      .catch((err) => console.error("Failed to load face models: ", err));
+  }, []);
 
   // Allowed image types (strict)
   const allowedMimeTypes = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
@@ -115,7 +124,22 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
     }
 
     setUploading(true);
+    setAnalyzingFaces(true);
     try {
+      // --- Face Embedding Extraction ---
+      let faces: { embedding: number[], box: any }[] = [];
+      if (file) {
+        // Convert File → HTMLImageElement (must be loaded in DOM)
+        const url = URL.createObjectURL(file);
+        const img = document.createElement('img');
+        img.src = url;
+        await new Promise(res => { img.onload = res; });
+        faces = await detectFacesAndEmbeddings(img);
+        URL.revokeObjectURL(url);
+        setFaceEmbeddings(faces.map(f => f.embedding));
+      }
+      setAnalyzingFaces(false);
+
       // Validate again right before upload (defense-in-depth)
       if (!isAllowedImageFile(file)) {
         throw new Error("Only JPG, JPEG, PNG, or WebP image files are allowed.");
@@ -163,6 +187,7 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         birth_date: birthDate || null,
         tags,
         is_private: isPrivate,
+        face_embeddings: faces.map(f => JSON.stringify(f.embedding)), // store as JSON-serialized
       });
 
       if (dbError) throw dbError;
@@ -172,6 +197,7 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         user_id: userId,
         file_path: fileName,
         tags,
+        face_embeddings: faces.map(f => JSON.stringify(f.embedding)),
       });
       if (metaError) {
         console.warn("image_metadata insert warning:", metaError.message);
@@ -185,7 +211,9 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
       setFriendName("");
       setBirthDate("");
       setIsPrivate(true);
+      setFaceEmbeddings([]);
     } catch (error: any) {
+      setAnalyzingFaces(false);
       console.error("Upload error:", error);
       toast.error(error.message || "Failed to upload");
     } finally {
@@ -203,6 +231,12 @@ const UploadSection = ({ userId }: UploadSectionProps) => {
         <CardDescription>Share a moment with AI-powered tagging</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {analyzingFaces && (
+          <div className="py-3 flex items-center gap-2 animate-pulse">
+            <span className="loader mr-2" style={{width:16, height:16, borderRadius:'50%', borderTop:'2px solid #38bdf8', borderRight:'2px solid transparent', animation:'spin 1s linear infinite', display:'inline-block'}}></span>
+            <span className="font-medium text-sky-500">Analyzing Faces…</span>
+          </div>
+        )}
         <div className="space-y-2">
           <Label htmlFor="photo">Photo</Label>
           <Input
